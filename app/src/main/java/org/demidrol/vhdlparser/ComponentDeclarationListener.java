@@ -1,7 +1,7 @@
 package org.demidrol.vhdlparser;
 
-import java.util.HashMap;
-import java.util.LinkedList;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.antlr.v4.runtime.ParserRuleContext;
@@ -9,7 +9,7 @@ import org.antlr.v4.runtime.misc.Interval;
 import org.demidrol.vhdlparser.vhdlParser.Component_declarationContext;
 import org.demidrol.vhdlparser.vhdlParser.Package_declarationContext;
 
-public class vhdlMyListener extends vhdlBaseListener {
+public class ComponentDeclarationListener extends vhdlBaseListener {
 
     // if component is inside package
     private String package_name = null;
@@ -18,7 +18,7 @@ public class vhdlMyListener extends vhdlBaseListener {
     private String entity_name = null;
     private String architecture_name = null;
 
-    private List<Object> components = new LinkedList<Object>();
+    private List<MyComponentDeclaration> components = new ArrayList<>();
 
     public static String getString(ParserRuleContext ctx) {
         var start = ctx.getStart().getStartIndex();
@@ -27,7 +27,7 @@ public class vhdlMyListener extends vhdlBaseListener {
         return ctx.start.getInputStream().getText(interval);
     }
 
-    public List<Object> getComponents() {
+    public List<MyComponentDeclaration> getComponents() {
         return this.components;
     }
 
@@ -43,10 +43,6 @@ public class vhdlMyListener extends vhdlBaseListener {
 
     @Override
     public void enterArchitecture_body(vhdlParser.Architecture_bodyContext ctx) {
-        var len = ctx.identifier().size();
-        assert (len == 2) ||
-            ((len == 3) &&
-             (ctx.identifier(0).getText().toLowerCase() == ctx.identifier(2).getText().toLowerCase()));
         this.entity_name = ctx.identifier(1).getText().toLowerCase();
         this.architecture_name = ctx.identifier(1).getText().toLowerCase();
     }
@@ -63,42 +59,36 @@ public class vhdlMyListener extends vhdlBaseListener {
             (this.package_name != null) ||
             (this.entity_name != null);
 
-        var obj = new HashMap<String, Object>();
-
-        assert ctx.identifier().size() == 1;
-        obj.put("id", ctx.identifier(0).getText());
-
-        var origin = new HashMap<String, Object>();
-        origin.put("filename", ctx.start.getInputStream().getSourceName());
-        origin.put("line_start", ctx.start.getLine());
-        origin.put("line_stop", ctx.stop.getLine());
-        if (this.package_name != null) {
-            origin.put("kind", "package");
-            origin.put("package", this.package_name);
-        } else if (this.entity_name != null) {
-            origin.put("kind", "entity");
-            origin.put("entity", this.entity_name);
-            origin.put("architecture", this.architecture_name);
+        var component_id = ctx.identifier(0).getText();
+        if (Arrays.asList(ExcludedComponents.components).contains(component_id)) {
+            return;
         }
-        obj.put("origin", origin);
+        MyOrigin origin = null;
+        if (this.package_name != null) {
+            origin = new MyOriginPackage(ctx.start.getInputStream().getSourceName(),
+                                    ctx.start.getLine(),
+                                    ctx.stop.getLine(),
+                                    this.package_name);
+        } else if (this.entity_name != null) {
+            origin = new MyOriginEntity(ctx.start.getInputStream().getSourceName(),
+                    ctx.start.getLine(),
+                    ctx.stop.getLine(),
+                    this.entity_name,
+                    this.architecture_name);
+        }
 
-        var generics = new LinkedList<Object>();
+        var generics = new ArrayList<MyGenericDeclaration>();
         if (ctx.generic_clause() != null) {
             for (var g : ctx.generic_clause().generic_list().interface_constant_declaration()) {
                 var g_type = getString(g.subtype_indication()).toLowerCase();
                 String g_default = (g.VARASGN() == null) ? null : getString(g.expression());
                 g.identifier_list().identifier().forEach(id -> {
-                        var generic = new HashMap<String, Object>();
-                        generic.put("name", id.getText());
-                        generic.put("type", g_type);
-                        generic.put("default", g_default);
-                        generics.add(generic);
+                        generics.add(new MyGenericDeclaration(id.getText(), g_type, g_default));
                     });
             }
         }
-        obj.put("generics", generics);
 
-        var ports = new LinkedList<Object>();
+        var ports = new ArrayList<MyPortDeclaration>();
         if (ctx.port_clause() != null) {
             for (var p :
                      ctx.port_clause()
@@ -109,17 +99,12 @@ public class vhdlMyListener extends vhdlBaseListener {
                 var p_direction = (p.signal_mode() == null) ? "in" : getString(p.signal_mode()).toLowerCase();
                 var p_default = (p.VARASGN() == null) ? null : getString(p.expression()).toLowerCase();
                 p.identifier_list().identifier().forEach(id -> {
-                    var port = new HashMap<String, Object>();
-                    port.put("name", id.getText());
-                    port.put("type", p_type);
-                    port.put("direction", p_direction);
-                    port.put("default", p_default);
-                    ports.add(port);
-                });
+                        ports.add(new MyPortDeclaration(id.getText(), p_direction, p_type, p_default));
+                    });
             }
         }
-        obj.put("ports", ports);
 
+        var obj = new MyComponentDeclaration(component_id, origin, generics, ports);
         this.components.add(obj);
     }
 }
